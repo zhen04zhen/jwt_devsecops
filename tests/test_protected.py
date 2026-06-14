@@ -11,7 +11,7 @@ def test_access_with_valid_token(client, valid_token):
 
 def test_access_without_token(client):
     response = client.get("/protected")
-    assert response.status_code == 200
+    assert response.status_code == 401
     assert response.get_json()["error"] == "Token missing"
 
 
