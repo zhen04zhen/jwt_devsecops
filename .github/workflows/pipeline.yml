@@ -1,0 +1,89 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. 取得程式碼 ──
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. 安裝 Python ──
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── 3. 安裝依賴 ──
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. 執行測試 ──
+      - name: Run tests
+        run: pytest tests/ -v
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+      # ── 5. 機密掃描（gitleaks）──
+      - name: Secret scan with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 6. SAST 靜態分析（ShiftLeft Scan）──
+      - name: SAST scan with ShiftLeft
+        uses: ShiftLeftSecurity/scan-action@master
+        with:
+          type: python
+        env:
+          WORKSPACE: ${{ github.workspace }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 7. 依賴漏洞掃描（pip-audit）──
+      - name: Dependency vulnerability scan
+        run: |
+          pip install pip-audit
+          pip-audit --format json --output pip-audit-report.json || true
+          pip-audit
+
+      # ── 8. 打包 Docker Image ──
+      - name: Build Docker image
+        run: docker build -t jwt-api:${{ github.sha }} .
+
+      # ── 9. 容器漏洞掃描（Trivy）──
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: jwt-api:${{ github.sha }}
+          format: json
+          output: trivy-report.json
+          exit-code: "0"
+
+      # ── 10. Dockerfile 安全檢查（Dockle）──
+      - name: Scan Dockerfile with Dockle
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            goodwithtech/dockle:latest \
+            --format json \
+            jwt-api:${{ github.sha }} > dockle-report.json 2>&1 || true
+
+      # ── 11. 上傳所有掃描報告 ──
+      - name: Upload scan reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            pip-audit-report.json
+            trivy-report.json
+            dockle-report.json
